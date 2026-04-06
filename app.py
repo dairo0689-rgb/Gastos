@@ -1,91 +1,57 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-import os
 
-st.set_page_config(page_title="Gastos 2026", layout="wide", page_icon="📊")
+st.set_page_config(page_title="Visualizador Gastos 2026", layout="wide")
 
-def limpiar_datos(df, mes_nombre):
-    """Limpia las filas vacías y extrae GASTOS y VALOR"""
-    if df.empty:
-        return pd.DataFrame()
-    
-    # Renombrar columnas si es necesario y limpiar espacios
-    df.columns = [c.strip().upper() for c in df.columns]
-    
-    # Quedarnos solo con lo importante
-    if 'GASTOS' in df.columns and 'VALOR' in df.columns:
-        df = df.dropna(subset=['GASTOS', 'VALOR'])
-        df['VALOR'] = pd.to_numeric(df['VALOR'], errors='coerce')
-        df = df.dropna(subset=['VALOR'])
-        df['Mes'] = mes_nombre
-        return df[['Mes', 'GASTOS', 'VALOR', 'FECHA', 'ESTADO']]
-    return pd.DataFrame()
+st.title("📊 Mi Calculadora de Gastos 2026")
+st.write("Sube tu archivo de Excel para analizar los meses.")
 
-@st.cache_data
-def cargar_archivos_locales():
-    meses = [
-        "ENERO", "FEBRERO", "MARZO", "ABRIL", "MAYO", "JUNIO", 
-        "JULIO", "AGOSTO", "SEPTIEMBRE", "OCTUBRE", "NOVIEMBRE", "DICIEMBRE"
-    ]
-    lista_dfs = []
+# El "File Uploader" permite que la app funcione en GitHub sin errores de "Archivo no encontrado"
+uploaded_file = st.file_uploader("Elige tu archivo Gastos2026.xlsx", type="xlsx")
+
+if uploaded_file is not None:
+    # Leer todas las pestañas del Excel
+    excel_data = pd.ExcelFile(uploaded_file)
+    nombres_hojas = excel_data.sheet_names
     
-    for mes in meses:
-        # Probamos el nombre exacto que subiste
-        filename = f"Gastos2026.xlsx - {mes}.csv"
+    # Filtrar solo las hojas que son meses (omitir 'DEUDAS', 'SERVICIOS', etc. si quieres)
+    meses_validos = [m for m in nombres_hojas if m not in ['DEUDAS', 'SERVICIOS', 'PORTADA']]
+    
+    lista_todos_los_gastos = []
+
+    for mes in meses_validos:
+        df_mes = pd.read_excel(uploaded_file, sheet_name=mes)
         
-        if os.path.exists(filename):
-            try:
-                temp_df = pd.read_csv(filename)
-                df_limpio = limpiar_datos(temp_df, mes)
-                if not df_limpio.empty:
-                    lista_dfs.append(df_limpio)
-            except Exception as e:
-                st.warning(f"No se pudo leer {mes}: {e}")
-                
-    if lista_dfs:
-        return pd.concat(lista_dfs, ignore_index=True)
-    return pd.DataFrame()
-
-# --- INTERFAZ ---
-st.title("📊 Control de Gastos 2026")
-
-df_total = cargar_archivos_locales()
-
-if not df_total.empty:
-    meses_detectados = df_total['Mes'].unique().tolist()
-    tabs = st.tabs(["🏠 Resumen Anual"] + [f"📅 {m}" for m in meses_detectados])
-
-    # PESTAÑA RESUMEN
-    with tabs[0]:
-        resumen = df_total.groupby('Mes', sort=False)['VALOR'].sum().reset_index()
-        st.metric("Total Gastado Año", f"${df_total['VALOR'].sum():,.0f}")
+        # Limpieza rápida de columnas
+        df_mes.columns = [str(c).strip().upper() for c in df_mes.columns]
         
-        fig = px.bar(resumen, x='Mes', y='VALOR', color='VALOR', 
-                     title="Comparativa de Gastos Mensuales",
-                     color_continuous_scale='Blues')
-        st.plotly_chart(fig, use_container_width=True)
+        if 'GASTOS' in df_mes.columns and 'VALOR' in df_mes.columns:
+            df_mes = df_mes.dropna(subset=['GASTOS', 'VALOR'])
+            df_mes['VALOR'] = pd.to_numeric(df_mes['VALOR'], errors='coerce')
+            df_mes = df_mes.dropna(subset=['VALOR'])
+            df_mes['MES_ORIGEN'] = mes
+            lista_todos_los_gastos.append(df_mes)
 
-    # PESTAÑAS POR MES
-    for i, mes in enumerate(meses_detectados):
-        with tabs[i+1]:
-            df_mes = df_total[df_total['Mes'] == mes]
-            col_left, col_right = st.columns([2, 1])
+    if lista_todos_los_gastos:
+        df_total = pd.concat(lista_todos_los_gastos, ignore_index=True)
+        
+        # Crear pestañas en la App
+        tabs = st.tabs(["🏠 Resumen Anual"] + meses_validos)
+        
+        with tabs[0]:
+            total_año = df_total['VALOR'].sum()
+            st.metric("Total Gastado detectado", f"${total_año:,.0f}")
+            fig = px.bar(df_total.groupby('MES_ORIGEN', sort=False)['VALOR'].sum().reset_index(), 
+                         x='MES_ORIGEN', y='VALOR', title="Gastos por Mes")
+            st.plotly_chart(fig, use_container_width=True)
             
-            with col_left:
-                st.subheader(f"Lista de Gastos - {mes}")
-                st.dataframe(df_mes.drop(columns=['Mes']), use_container_width=True)
-            
-            with col_right:
-                st.subheader("Distribución")
-                fig_pie = px.pie(df_mes, values='VALOR', names='GASTOS', hole=0.4)
-                st.plotly_chart(fig_pie, use_container_width=True)
-            
-            st.success(f"Total {mes}: **${df_mes['VALOR'].sum():,.0f}**")
+        for i, mes in enumerate(meses_validos):
+            with tabs[i+1]:
+                datos_mes = df_total[df_total['MES_ORIGEN'] == mes]
+                st.dataframe(datos_mes[['GASTOS', 'VALOR']], use_container_width=True)
+                st.info(f"Total {mes}: ${datos_mes['VALOR'].sum():,.0f}")
+    else:
+        st.warning("No se encontraron columnas 'GASTOS' y 'VALOR' en las hojas del archivo.")
 else:
-    st.error("⚠️ No se encontraron los archivos CSV.")
-    st.info("""
-    **Para solucionar esto:**
-    1. Asegúrate de que los archivos `.csv` estén en la misma carpeta que este código.
-    2. Los nombres deben ser exactamente: `Gastos2026.xlsx - ENERO.csv`, etc.
-    """)
+    st.info("Esperando archivo... Por favor sube el .xlsx desde tu computadora.")
