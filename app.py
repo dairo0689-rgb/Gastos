@@ -1,81 +1,93 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-import glob
 import os
 
 st.set_page_config(page_title="Gastos 2026", layout="wide")
 
 st.title("📊 Mi Panel de Gastos 2026")
 
-def limpiar_datos(df, nombre_archivo):
-    """Limpia el contenido del Excel"""
+def limpiar_y_procesar(df, nombre_mes):
+    """Limpia las columnas y filtra filas vacías"""
     try:
-        # Poner columnas en mayúsculas para evitar errores de escritura
+        # Poner todas las columnas en mayúsculas y quitar espacios
         df.columns = [str(c).strip().upper() for c in df.columns]
         
+        # Verificar que existan las columnas GASTOS y VALOR
         if 'GASTOS' in df.columns and 'VALOR' in df.columns:
+            # Eliminar filas donde GASTOS o VALOR estén vacíos
             df = df.dropna(subset=['GASTOS', 'VALOR'])
+            # Convertir VALOR a número (maneja puntos, comas y símbolos)
             df['VALOR'] = pd.to_numeric(df['VALOR'], errors='coerce')
             df = df.dropna(subset=['VALOR'])
-            # Extraer el mes del nombre del archivo (ej: de 'Gastos-ENERO.xlsx' saca 'ENERO')
-            df['MES_REF'] = nombre_archivo.split(' - ')[-1].replace('.xlsx', '').upper()
-            return df[['MES_REF', 'GASTOS', 'VALOR']]
-    except:
-        pass
+            
+            if not df.empty:
+                df['MES_REF'] = nombre_mes
+                return df[['MES_REF', 'GASTOS', 'VALOR']]
+    except Exception as e:
+        st.sidebar.error(f"Error procesando {nombre_mes}: {e}")
     return pd.DataFrame()
 
 @st.cache_data
-def cargar_archivos_dinamicos():
-    """Busca TODOS los archivos .xlsx en el repositorio"""
-    # Esta línea busca cualquier archivo .xlsx en la carpeta principal
-    archivos_excel = glob.glob("*.xlsx")
-    
+def cargar_datos_totales():
+    archivos = os.listdir('.')
     lista_dfs = []
     
-    for archivo in archivos_excel:
-        try:
-            # Intentar leer el archivo
-            df_temp = pd.read_excel(archivo, engine='openpyxl')
-            df_limpio = limpiar_datos(df_temp, archivo)
-            if not df_limpio.empty:
-                lista_dfs.append(df_limpio)
-        except:
-            continue
-            
+    # Lista de meses para buscar
+    meses = ["ENERO", "FEBRERO", "MARZO", "ABRIL", "MAYO", "JUNIO", 
+             "JULIO", "AGOSTO", "SEPTIEMBRE", "OCTUBRE", "NOVIEMBRE", "DICIEMBRE"]
+    
+    for mes in meses:
+        # Buscamos cualquier archivo que contenga el nombre del mes
+        archivo_encontrado = next((f for f in archivos if mes in f.upper()), None)
+        
+        if archivo_encontrado:
+            try:
+                # DETECCIÓN HÍBRIDA: ¿Es CSV o Excel?
+                if archivo_encontrado.lower().endswith('.csv'):
+                    temp_df = pd.read_csv(archivo_encontrado)
+                else:
+                    temp_df = pd.read_excel(archivo_encontrado, engine='openpyxl')
+                
+                df_limpio = limpiar_y_procesar(temp_df, mes)
+                if not df_limpio.empty:
+                    lista_dfs.append(df_limpio)
+            except:
+                continue
+                
     if lista_dfs:
         return pd.concat(lista_dfs, ignore_index=True)
     return pd.DataFrame()
 
 # --- INTERFAZ ---
-df_total = cargar_archivos_dinamicos()
+df_final = cargar_datos_totales()
 
-if not df_total.empty:
-    # Ordenar meses cronológicamente para las pestañas
-    orden_meses = ["ENERO", "FEBRERO", "MARZO", "ABRIL", "MAYO", "JUNIO", 
-                    "JULIO", "AGOSTO", "SEPTIEMBRE", "OCTUBRE", "NOVIEMBRE", "DICIEMBRE"]
-    
-    meses_presentes = [m for m in orden_meses if m in df_total['MES_REF'].unique()]
-    
-    st.sidebar.success(f"✅ Se encontraron {len(meses_presentes)} archivos Excel.")
+if not df_final.empty:
+    meses_ordenados = ["ENERO", "FEBRERO", "MARZO", "ABRIL", "MAYO", "JUNIO", 
+                       "JULIO", "AGOSTO", "SEPTIEMBRE", "OCTUBRE", "NOVIEMBRE", "DICIEMBRE"]
+    meses_en_datos = [m for m in meses_ordenados if m in df_final['MES_REF'].unique()]
 
-    tabs = st.tabs(["🏠 Resumen"] + [f"📅 {m}" for m in meses_presentes])
+    st.sidebar.success(f"✅ Se cargaron {len(meses_en_datos)} meses.")
+
+    tabs = st.tabs(["🏠 Resumen"] + [f"📅 {m}" for m in meses_en_datos])
 
     with tabs[0]:
-        total = df_total['VALOR'].sum()
-        st.metric("Gasto Total Acumulado", f"${total:,.0f}")
-        
-        resumen = df_total.groupby('MES_REF', sort=False)['VALOR'].sum().reindex(meses_presentes).reset_index()
-        fig = px.line(resumen, x='MES_REF', y='VALOR', title="Evolución de Gastos", markers=True)
+        st.metric("Total Gastado 2026", f"${df_final['VALOR'].sum():,.0f}")
+        resumen = df_final.groupby('MES_REF', sort=False)['VALOR'].sum().reindex(meses_en_datos).reset_index()
+        fig = px.bar(resumen, x='MES_REF', y='VALOR', title="Gastos Mensuales", color='VALOR')
         st.plotly_chart(fig, use_container_width=True)
 
-    for i, mes in enumerate(meses_presentes):
+    for i, mes in enumerate(meses_en_datos):
         with tabs[i+1]:
-            df_mes = df_total[df_total['MES_REF'] == mes]
-            st.dataframe(df_mes[['GASTOS', 'VALOR']], use_container_width=True)
-            st.info(f"Total {mes}: ${df_mes['VALOR'].sum():,.0f}")
+            datos_mes = df_final[df_final['MES_REF'] == mes]
+            c1, c2 = st.columns([2, 1])
+            with c1:
+                st.dataframe(datos_mes[['GASTOS', 'VALOR']], use_container_width=True)
+            with c2:
+                fig_p = px.pie(datos_mes, values='VALOR', names='GASTOS')
+                st.plotly_chart(fig_p, use_container_width=True)
 else:
-    st.error("No se detectaron archivos .xlsx en la carpeta actual.")
-    st.write("Archivos que el sistema ve actualmente:")
+    st.error("No se encontraron datos. Verifica que tus archivos en GitHub tengan columnas llamadas 'GASTOS' y 'VALOR'.")
+    st.write("Archivos que veo en tu carpeta:")
     st.code(os.listdir('.'))
 
