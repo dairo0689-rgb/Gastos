@@ -1,71 +1,78 @@
-import streamlit as st
+
+    import streamlit as st
 import pandas as pd
 import plotly.express as px
 from datetime import datetime
 
-# Configuración de la página
-st.set_page_config(page_title="Control de Gastos", page_icon="💰", layout="wide")
+st.set_page_config(page_title="Gastos por Mes", page_icon="📅", layout="wide")
 
-# Inicializar el estado de la sesión para guardar los datos
+# 1. DATOS INICIALES (Incluyendo los de tu libreta)
 if 'gastos' not in st.session_state:
-    st.session_state.gastos = pd.DataFrame(columns=['Fecha', 'Categoría', 'Descripción', 'Monto'])
+    data_inicial = {
+        'Fecha': ['2026-04-01', '2026-04-02', '2026-04-03', '2026-04-04', '2026-04-05', '2026-04-05'],
+        'Categoría': ['Vivienda', 'Alimentación', 'Transporte', 'Vivienda', 'Alimentación', 'Ocio'],
+        'Descripción': ['Arriendo', 'Supermercado', 'Gasolina', 'Recibo Luz', 'Restaurante', 'Cine'],
+        'Monto': [1200000.0, 350000.0, 120000.0, 85000.0, 65000.0, 45000.0]
+    }
+    df_init = pd.DataFrame(data_inicial)
+    df_init['Fecha'] = pd.to_datetime(df_init['Fecha']).dt.date
+    st.session_state.gastos = df_init
 
-# Título y Sidebar
-st.title("💰 Mi Calculadora de Gastos")
-st.sidebar.header("Añadir Nuevo Gasto")
-
-# Formulario de entrada en la barra lateral
-with st.sidebar.form("formulario_gastos"):
-    fecha = st.date_input("Fecha", datetime.now())
-    categoria = st.selectbox("Categoría", ["Alimentación", "Transporte", "Vivienda", "Ocio", "Salud", "Otros"])
-    descripcion = st.text_input("Descripción (Ej: Cena, Gasolina)")
-    monto = st.number_input("Monto ($)", min_value=0.0, format="%.2f")
-    
-    boton_añadir = st.form_submit_button("Añadir Gasto")
-
-if boton_añadir:
-    nuevo_gasto = pd.DataFrame({
-        'Fecha': [fecha],
-        'Categoría': [categoria],
-        'Descripción': [descripcion],
-        'Monto': [monto]
-    })
-    st.session_state.gastos = pd.concat([st.session_state.gastos, nuevo_gasto], ignore_index=True)
-    st.success("¡Gasto registrado!")
-
-# --- VISUALIZACIÓN DE DATOS ---
-df = st.session_state.gastos
-
-if not df.empty:
-    # Métricas principales
-    total_gastado = df['Monto'].sum()
-    st.metric(label="Gasto Total Acumulado", value=f"${total_gastado:,.2f}")
-
-    col1, col2 = st.columns(2)
-
-    with col1:
-        st.subheader("Listado de Gastos")
-        st.dataframe(df.sort_values(by='Fecha', ascending=False), use_container_width=True)
-
-    with col2:
-        st.subheader("Distribución por Categoría")
-        fig = px.pie(df, values='Monto', names='Categoría', hole=0.4,
-                     color_discrete_sequence=px.colors.sequential.RdBu)
-        st.plotly_chart(fig, use_container_width=True)
-
-    # Gráfico de evolución temporal
-    st.subheader("Evolución de Gastos en el Tiempo")
-    df_tiempo = df.groupby('Fecha')['Monto'].sum().reset_index()
-    fig_linea = px.line(df_tiempo, x='Fecha', y='Monto', markers=True)
-    st.plotly_chart(fig_linea, use_container_width=True)
-
-    # Opción para borrar datos
-    if st.button("Limpiar todos los datos"):
-        st.session_state.gastos = pd.DataFrame(columns=['Fecha', 'Categoría', 'Descripción', 'Monto'])
+# --- BARRA LATERAL PARA AGREGAR ---
+st.sidebar.header("Añadir Gasto")
+with st.sidebar.form("nuevo_gasto"):
+    f = st.date_input("Fecha", datetime.now())
+    c = st.selectbox("Categoría", ["Vivienda", "Alimentación", "Transporte", "Ocio", "Salud", "Otros"])
+    d = st.text_input("Descripción")
+    m = st.number_input("Monto ($)", min_value=0.0, step=1000.0)
+    if st.form_submit_button("Registrar"):
+        nuevo = pd.DataFrame({'Fecha': [f], 'Categoría': [c], 'Descripción': [d], 'Monto': [m]})
+        st.session_state.gastos = pd.concat([st.session_state.gastos, nuevo], ignore_index=True)
         st.rerun()
-else:
-    st.info("Aún no has registrado gastos. Usa el panel de la izquierda para empezar.")
+
+# --- PROCESAMIENTO DE MESES ---
+df = st.session_state.gastos
+df['Fecha'] = pd.to_datetime(df['Fecha'])
+# Crear una columna de "Mes" para agrupar (Eje: "2026-04")
+df['Mes_Nombre'] = df['Fecha'].dt.strftime('%B %Y') 
+meses_disponibles = df['Mes_Nombre'].unique().tolist()
+
+st.title("📊 Control de Gastos Mensuales")
+
+# Crear las pestañas: "General" + una para cada mes encontrado
+tabs = st.tabs(["Resumen General"] + meses_disponibles)
+
+# TAB 0: RESUMEN GENERAL
+with tabs[0]:
+    col1, col2 = st.columns(2)
+    total = df['Monto'].sum()
+    col1.metric("Gasto Total Histórico", f"${total:,.2f}")
+    
+    fig_gen = px.bar(df.groupby('Mes_Nombre')['Monto'].sum().reset_index(), 
+                     x='Mes_Nombre', y='Monto', title="Gastos Totales por Mes",
+                     color_discrete_sequence=['#003366'])
+    st.plotly_chart(fig_gen, use_container_width=True)
+
+# TABS DINÁMICAS POR MES
+for i, mes in enumerate(meses_disponibles):
+    with tabs[i+1]:
+        df_mes = df[df['Mes_Nombre'] == mes]
+        
+        c1, c2 = st.columns([2, 1])
+        with c1:
+            st.subheader(f"Detalle de {mes}")
+            st.table(df_mes[['Fecha', 'Categoría', 'Descripción', 'Monto']].sort_values('Fecha'))
+        
+        with c2:
+            st.subheader("Distribución")
+            fig_pie = px.pie(df_mes, values='Monto', names='Categoría', hole=0.4)
+            st.plotly_chart(fig_pie, use_container_width=True)
+        
+        st.metric(f"Total {mes}", f"${df_mes['Monto'].sum():,.2f}")
 
 st.sidebar.divider()
-st.sidebar.write("Desarrollado por: Dairo Romero")
+if st.sidebar.button("Borrar todo"):
+    st.session_state.gastos = pd.DataFrame(columns=['Fecha', 'Categoría', 'Descripción', 'Monto'])
+    st.rerun()
+
 
