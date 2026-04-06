@@ -1,75 +1,100 @@
 import streamlit as st
-import pandas as pd  # <--- Esto es lo que falta para que 'pd' funcione
+import pandas as pd
 import plotly.express as px
-from datetime import datetime
+import os
 
-# 1. Configuración de la página (DEBE SER LA PRIMERA COMAND DE STREAMLIT)
-st.set_page_config(page_title="Gastos por Mes", page_icon="📅", layout="wide")
+st.set_page_config(page_title="Consolidador Gastos 2026", layout="wide")
 
-# 2. Inicialización de datos (Datos de tu libreta incluidos)
-if 'gastos' not in st.session_state:
-    data_inicial = {
-        'Fecha': ['2026-04-01', '2026-04-02', '2026-04-03', '2026-04-04', '2026-04-05', '2026-04-05'],
-        'Categoría': ['Vivienda', 'Alimentación', 'Transporte', 'Vivienda', 'Alimentación', 'Ocio'],
-        'Descripción': ['Arriendo', 'Supermercado', 'Gasolina', 'Recibo Luz', 'Restaurante', 'Cine'],
-        'Monto': [1200000.0, 350000.0, 120000.0, 85000.0, 65000.0, 45000.0]
-    }
-    df_init = pd.DataFrame(data_inicial)
-    df_init['Fecha'] = pd.to_datetime(df_init['Fecha']).dt.date
-    st.session_state.gastos = df_init
+# Nombre del archivo maestro
+MASTER_FILE = "Gastos_Consolidados_2026.xlsx"
 
-# --- BARRA LATERAL ---
-st.sidebar.header("📝 Nuevo Registro")
-with st.sidebar.form("nuevo_gasto"):
-    f = st.date_input("Fecha", datetime.now())
-    c = st.selectbox("Categoría", ["Vivienda", "Alimentación", "Transporte", "Ocio", "Salud", "Otros"])
-    d = st.text_input("Descripción")
-    m = st.number_input("Monto ($)", min_value=0.0, step=1000.0)
-    if st.form_submit_button("Añadir a la lista"):
-        nuevo = pd.DataFrame({'Fecha': [f], 'Categoría': [c], 'Descripción': [d], 'Monto': [m]})
-        st.session_state.gastos = pd.concat([st.session_state.gastos, nuevo], ignore_index=True)
-        st.rerun()
+def limpiar_datos(df, mes_nombre):
+    """Limpia los datos de los CSV para que sean legibles"""
+    # Filtramos filas donde 'GASTOS' o 'VALOR' sean nulos
+    df = df.dropna(subset=['GASTOS', 'VALOR'])
+    # Convertimos VALOR a numérico
+    df['VALOR'] = pd.to_numeric(df['VALOR'], errors='coerce')
+    df = df.dropna(subset=['VALOR'])
+    # Añadimos columna de mes para identificarlo
+    df['Mes'] = mes_nombre
+    return df[['Mes', 'GASTOS', 'VALOR', 'FECHA', 'ESTADO']]
 
-# --- PROCESAMIENTO DE FECHAS ---
-df = st.session_state.gastos.copy()
-df['Fecha'] = pd.to_datetime(df['Fecha'])
-df['Mes_Nombre'] = df['Fecha'].dt.strftime('%B %Y') 
-meses_ordenados = df.sort_values(by='Fecha')['Mes_Nombre'].unique().tolist()
+@st.cache_data
+def cargar_todo_el_año():
+    """Carga y une todos los archivos CSV que subiste"""
+    meses = [
+        "ENERO", "FEBRERO", "MARZO", "ABRIL", "MAYO", "JUNIO", 
+        "JULIO", "AGOSTO", "SEPTIEMBRE", "OCTUBRE", "NOVIEMBRE", "DICIEMBRE"
+    ]
+    lista_dfs = []
+    
+    for mes in meses:
+        filename = f"Gastos2026.xlsx - {mes}.csv"
+        if os.path.exists(filename):
+            temp_df = pd.read_csv(filename)
+            df_limpio = limpiar_datos(temp_df, mes)
+            lista_dfs.append(df_limpio)
+    
+    if lista_dfs:
+        return pd.concat(lista_dfs, ignore_index=True)
+    return pd.DataFrame()
 
-st.title("📊 Mi Control de Gastos Mensuales")
+# --- INTERFAZ ---
+st.title("📊 Visualizador de Gastos 2026")
+st.write("Datos extraídos de tus hojas de cálculo mensuales.")
 
-if not df.empty:
-    # 3. CREACIÓN DE PESTAÑAS (TABS)
-    tabs = st.tabs(["🏠 Resumen General"] + [f"📅 {m}" for m in meses_ordenados])
+df_total = cargar_todo_el_año()
 
-    # Pestaña General
+if not df_total.empty:
+    # 1. PESTAÑAS
+    nombres_meses = df_total['Mes'].unique().tolist()
+    tabs = st.tabs(["🏠 Resumen Anual"] + [f"📅 {m}" for m in nombres_meses])
+
+    # PESTAÑA RESUMEN
     with tabs[0]:
-        total_h = df['Monto'].sum()
-        st.metric("Gasto Total Histórico", f"${total_h:,.0f}")
-        fig_bar = px.bar(df.groupby('Mes_Nombre', sort=False)['Monto'].sum().reset_index(), 
-                         x='Mes_Nombre', y='Monto', title="Gastos por Mes", color_discrete_sequence=['#1f77b4'])
-        st.plotly_chart(fig_bar, use_container_width=True)
+        col1, col2 = st.columns([1, 2])
+        resumen_mes = df_total.groupby('Mes', sort=False)['VALOR'].sum().reset_index()
+        
+        with col1:
+            st.metric("Gasto Total Año", f"${df_total['VALOR'].sum():,.0f}")
+            st.write("### Gastos por Mes")
+            st.dataframe(resumen_mes, use_container_width=True)
+        
+        with col2:
+            fig = px.bar(resumen_mes, x='Mes', y='VALOR', 
+                         title="Comparativa Mensual",
+                         color='VALOR', color_continuous_scale='Blues')
+            st.plotly_chart(fig, use_container_width=True)
 
-    # Pestañas Mensuales Dinámicas
-    for i, mes in enumerate(meses_ordenados):
+    # PESTAÑAS POR MES
+    for i, mes in enumerate(nombres_meses):
         with tabs[i+1]:
-            df_mes = df[df['Mes_Nombre'] == mes]
-            col_a, col_b = st.columns([2, 1])
+            df_mes = df_total[df_total['Mes'] == mes]
             
-            with col_a:
-                st.write(f"### Detalle de Gastos - {mes}")
-                st.dataframe(df_mes[['Fecha', 'Categoría', 'Descripción', 'Monto']].sort_values('Fecha'), use_container_width=True)
+            c1, c2 = st.columns([2, 1])
+            with c1:
+                st.write(f"#### Detalle de {mes}")
+                st.dataframe(df_mes.drop(columns=['Mes']), use_container_width=True)
             
-            with col_b:
-                st.write("### Porcentaje")
-                fig_pie = px.pie(df_mes, values='Monto', names='Categoría', hole=0.3)
+            with c2:
+                st.write("#### Distribución")
+                # Top 5 gastos del mes
+                fig_pie = px.pie(df_mes, values='VALOR', names='GASTOS', hole=0.3)
                 st.plotly_chart(fig_pie, use_container_width=True)
             
-            st.success(f"Total gastado en {mes}: **${df_mes['Monto'].sum():,.0f}**")
-else:
-    st.info("No hay datos disponibles.")
+            st.info(f"Total gastado en {mes}: **${df_mes['VALOR'].sum():,.0f}**")
 
-st.sidebar.divider()
-if st.sidebar.button("🗑️ Borrar Todo"):
-    st.session_state.gastos = pd.DataFrame(columns=['Fecha', 'Categoría', 'Descripción', 'Monto'])
-    st.rerun()
+    # 2. BOTÓN PARA DESCARGAR TODO UNIFICADO
+    st.sidebar.divider()
+    df_total.to_excel(MASTER_FILE, index=False)
+    with open(MASTER_FILE, "rb") as f:
+        st.sidebar.download_button(
+            label="📥 Descargar todo el 2026 en Excel",
+            data=f,
+            file_name="Consolidado_Gastos_2026.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+else:
+    st.error("No se encontraron los archivos CSV. Asegúrate de que los nombres coincidan.")
+
+st.sidebar.write("Archivos detectados:", len(df_total['Mes'].unique()) if not df_total.empty else 0)
